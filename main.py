@@ -3,8 +3,6 @@
  # @ Email: smkk00715@gmail.com
  # @ Create Time: 2023-10-14 21:41:53
  # @ Modified time: 2023-10-15 01:21:11
- # @ Description: This is a script to alert the user through status menu if he is not blinking 
- # for a long time.
  """
 
 
@@ -46,48 +44,108 @@ class StatusBarIcon(rumps.App):
         time_out_th: Value,
         ear_diff_th: Array,
         frame_queue: Queue,
+        detect_freq: Value,
+        noti_duty: Value,
+        blink_cnt_th: Value,
     ):
         super(StatusBarIcon, self).__init__("Eye Blink Monitor")
         # self.icon = "green.svg"  # Default icon
-        self.menu = ["Toggle cv2.imshow", "Set Timeout Threshold", "Set Detection Sensitivity", "QuitAll"]
-        self.menu["Toggle cv2.imshow"].title = "Open cv2.imshow"
+        self.menu = [
+            "Show detection frame",
+            "Set timeout threshold",
+            "Set detection sensitivity",
+            "Set detection frequency",
+            "Set blink count threshold",
+            "Set notification duty",
+            "Quit",
+        ]
+        self.title = "Eye🟢"
         self.quit_button = None  # Hide the Quit button
 
         self.show_frame_flag = show_frame_flag
         self.status_icon_flag = status_icon_flag
         self.frame_queue = frame_queue
         self.time_out_th = time_out_th
-        self.detection_sensitive = 0.5
+        self.detect_freq = detect_freq
         self.ear_diff_th = ear_diff_th
+        self.noti_duty = noti_duty
+        self.blink_cnt_th = blink_cnt_th
+
+        self.detection_sensitive = 0.5
         self.ear_diff_lb = -0.06
         self.qt_process = None
 
     def set_icon(self, status):
         if status == 1:
-            self.title = "🟢"
+            self.title = "Eye🟢"
         elif status == -1:
-            self.title = "🔴"
+            self.title = "Eye🔴"
 
-    @rumps.clicked("Toggle cv2.imshow")
-    def toggle_show_frame(self, _):
+    @rumps.clicked("Set blink count threshold")
+    def set_blink_cnt_th(self, _):
+        response = rumps.Window(
+            "Enter blink count threshold [15,50]:",
+            default_text=str(self.blink_cnt_th.value),
+            dimensions=(100, 25),
+        ).run()
+        if response.clicked:
+            try:
+                self.blink_cnt_th.value = int(response.text)
+                print("Blink count threshold set to {} times".format(self.blink_cnt_th.value))
+            except ValueError:
+                rumps.alert("Please enter a valid number!")
+
+    @rumps.clicked("Set notification duty")
+    def set_noti_duty(self, _):
+        response = rumps.Window(
+            "Enter notification duty in seconds:",
+            default_text=str(self.noti_duty.value),
+            dimensions=(100, 25),
+        ).run()
+        if response.clicked:
+            try:
+                self.noti_duty.value = int(response.text)
+                print("Notification duty set to {} seconds".format(self.noti_duty.value))
+            except ValueError:
+                rumps.alert("Please enter a valid number!")
+
+    @rumps.clicked("Set detection frequency")
+    def set_detect_freq(self, _):
+        response = rumps.Window(
+            "Enter detection frequency [1,60] Hz:",
+            default_text=str(self.detect_freq.value),
+            dimensions=(100, 25),
+        ).run()
+        if response.clicked:
+            try:
+                self.detect_freq.value = int(response.text)
+                print("Detection frequency set to {} Hz".format(self.detect_freq.value))
+            except ValueError:
+                rumps.alert("Please enter a valid number!")
+
+    @rumps.clicked("Show detection frame")
+    def toggle_show_frame(self, sender):
         self.show_frame_flag.value = -self.show_frame_flag.value
+        sender.state = not sender.state
         if self.show_frame_flag.value == -1:
-            self.menu["Toggle cv2.imshow"].title = "Open cv2.imshow"
             print("Hiding video frame")
             if not self.qt_process is None:
                 self.qt_process.terminate()
                 self.qt_process = None
         elif self.show_frame_flag.value == 1:
-            self.menu["Toggle cv2.imshow"].title = "Close cv2.imshow"
             print("Showing video frame")
             self.qt_process = Process(
                 target=show_video_frame, args=(self.frame_queue, self.show_frame_flag, self.ear_diff_th)
             )
             self.qt_process.start()
 
-    @rumps.clicked("Set Timeout Threshold")
+    @rumps.clicked("Set timeout threshold")
     def set_timeout(self, _):
-        response = rumps.Window("Enter timeout threshold in seconds:", default_text=str(self.time_out_th.value)).run()
+        response = rumps.Window(
+            "Enter timeout threshold in seconds:",
+            default_text=str(self.time_out_th.value),
+            dimensions=(100, 25),
+        ).run()
         if response.clicked:
             try:
                 self.time_out_th.value = int(response.text)
@@ -95,16 +153,18 @@ class StatusBarIcon(rumps.App):
             except ValueError:
                 rumps.alert("Please enter a valid number!")
 
-    @rumps.clicked("QuitAll")
+    @rumps.clicked("Quit")
     def quit(self, _):
         self.show_frame_flag.value = -2
         time.sleep(1)
         rumps.quit_application()
 
-    @rumps.clicked("Set Detection Sensitivity")
+    @rumps.clicked("Set detection sensitivity")
     def set_sensitivity(self, _):
         response = rumps.Window(
-            "Enter EAR difference threshold [0,1]:", default_text=str(self.detection_sensitive)
+            "Enter EAR difference threshold [0,1]:",
+            default_text=str(self.detection_sensitive),
+            dimensions=(100, 25),
         ).run()
         if response.clicked:
             try:
@@ -203,7 +263,9 @@ class BlinkDetector:
         ear_diff_th: Array,
         timeout_th: Value,
         set_icon_func,
-        detect_freq,
+        detect_freq: Value,
+        noti_duty: Value,
+        blink_cnt_th: Value,
     ):
         self.frame_queue = frame_queue
         self.show_frame_flag = show_frame_flag
@@ -212,6 +274,8 @@ class BlinkDetector:
         self.set_icon = set_icon_func
         self.time_out_th = timeout_th
         self.detect_freq = detect_freq
+        self.noti_duty = noti_duty  # [s] system notification duty
+        self.blink_cnt_th = blink_cnt_th  # [count] blink count threshold to notify in 1 min. 15-20 is normal. refer to https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8998332/
 
         self.width = 600
         self.height = 720
@@ -238,6 +302,7 @@ class BlinkDetector:
         return ear
 
     def run(self):
+        last_noti_t = time.time()
         while True:
             time.sleep(1 / self.detect_freq.value)
             frame = self.vs.read()
@@ -282,9 +347,6 @@ class BlinkDetector:
                     self.set_icon(-1)
                 else:
                     self.set_icon(1)
-                    rumps.notification(
-                        "Alert❗️", "👁️ Please blink! 👁️", "You have been staring at the screen for too long!"
-                    )
 
                 if self.ear_diff_list[0] < self.ear_diff_th[0] and self.ear_diff_list[-1] > self.ear_diff_th[1]:
                     self.blink_cnt += 1
@@ -318,6 +380,18 @@ class BlinkDetector:
                     )
                     if self.frame_queue.empty():
                         frame_queue.put(frame)
+
+            if time.time() - last_noti_t > self.noti_duty.value:
+                last_noti_t = time.time()
+                if self.blink_cnt < (self.blink_cnt_th.value * self.noti_duty.value / 60):
+                    rumps.notification(
+                        "Alert",
+                        "👁️ Please blink! 👁️",
+                        f"You only blinked {self.blink_cnt} times in the last {self.noti_duty.value} seconds!",
+                    )
+
+                self.blink_cnt = 0
+
             if self.show_frame_flag.value == -2:
                 break
         frame_queue.close()
@@ -331,9 +405,20 @@ if __name__ == "__main__":
     status_icon_flag = Value("i", -1)
     timeout_th = Value("i", 5)
     ear_diff_th = Array("f", [-0.03, -0.02])
-    detect_freq = Value("i", 30)
+    detect_freq = Value("i", 60)
+    blink_cnt_th = Value("i", 20)
+    noti_duty = Value("i", 120)
 
-    status_icon = StatusBarIcon(show_frame_flag, status_icon_flag, timeout_th, ear_diff_th, frame_queue)
+    status_icon = StatusBarIcon(
+        show_frame_flag,
+        status_icon_flag,
+        timeout_th,
+        ear_diff_th,
+        frame_queue,
+        detect_freq,
+        noti_duty,
+        blink_cnt_th,
+    )
 
     blink_detector = BlinkDetector(
         frame_queue,
@@ -343,6 +428,8 @@ if __name__ == "__main__":
         timeout_th,
         status_icon.set_icon,
         detect_freq,
+        noti_duty,
+        blink_cnt_th,
     )
     blink_thread = threading.Thread(target=blink_detector.run)
     blink_thread.start()
