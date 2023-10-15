@@ -21,6 +21,12 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QApplication, QLabel, QSlider, QVBoxLayout, QWidget
 from scipy.spatial import distance as dist
+import base64
+
+import blink_detection_pb2
+import blink_detection_pb2_grpc
+import grpc
+import numpy as np
 
 
 class LowPassFilter:
@@ -266,6 +272,8 @@ class BlinkDetector:
         detect_freq: Value,
         noti_duty: Value,
         blink_cnt_th: Value,
+        detect_mode="local",
+        remote_host=["localhost", "12345"],
     ):
         self.frame_queue = frame_queue
         self.show_frame_flag = show_frame_flag
@@ -276,16 +284,20 @@ class BlinkDetector:
         self.detect_freq = detect_freq
         self.noti_duty = noti_duty  # [s] system notification duty
         self.blink_cnt_th = blink_cnt_th  # [count] blink count threshold to notify in 1 min. 15-20 is normal. refer to https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8998332/
+        self.detect_mode = detect_mode
 
+        self.blink_cnt = 0
         self.width = 600
         self.height = 720
 
-        self.blink_cnt = 0
-        self.detector = dlib.get_frontal_face_detector()
-        self.predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
-
-        (self.lStart, self.lEnd) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
-        (self.rStart, self.rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
+        if self.detect_mode == "local":
+            self.detector = dlib.get_frontal_face_detector()
+            self.predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+            (self.lStart, self.lEnd) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
+            (self.rStart, self.rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
+        elif self.detect_mode == "remote":
+            self.channel = grpc.insecure_channel(f"{remote_host[0]}:{remote_host[1]}")
+            self.stub = blink_detection_pb2_grpc.BlinkDetectionStub(self.channel)
 
         self.vs = VideoStream(src=0).start()
         self.ear_filter = LowPassFilter(0.5)
@@ -312,74 +324,85 @@ class BlinkDetector:
             frame = imutils.resize(frame, width=300)
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            # detect faces in the grayscale frame
-            rects = self.detector(gray, 0)
-            # loop over the face detections
-            for rect in rects:
-                shape = self.predictor(gray, rect)
-                shape = face_utils.shape_to_np(shape)
+            if self.detect_mode == "local":
+                # detect faces in the grayscale frame
+                rects = self.detector(gray, 0)
+                # loop over the face detections
+                for rect in rects:
+                    shape = self.predictor(gray, rect)
+                    shape = face_utils.shape_to_np(shape)
 
-                # extract the left and right eye coordinates, then use the coordinates to compute the eye aspect ratio for both eyes
-                leftEye = shape[self.lStart : self.lEnd]
-                rightEye = shape[self.rStart : self.rEnd]
-                leftEAR = self.eye_aspect_ratio(leftEye)
-                rightEAR = self.eye_aspect_ratio(rightEye)
+                    # extract the left and right eye coordinates, then use the coordinates to compute the eye aspect ratio for both eyes
+                    left_eye = shape[self.lStart : self.lEnd]
+                    right_eye = shape[self.rStart : self.rEnd]
+                    left_EAR = self.eye_aspect_ratio(left_eye)
+                    right_EAR = self.eye_aspect_ratio(right_eye)
 
-                # average the eye aspect ratio together for both eyes
-                ear = (leftEAR + rightEAR) / 2.0
-                ear = self.ear_filter(ear)
-                self.ear_list.append(ear)
-                self.ear_diff = ear - self.ear_last
-                self.ear_last = ear
-                self.ear_diff_list.append(self.ear_diff)
-                if len(self.ear_diff_list) > 3:
-                    self.ear_diff_list.pop(0)
-                if len(self.ear_list) > 100:
-                    self.ear_list.pop(0)
+                    # average the eye aspect ratio together for both eyes
+                    ear = (left_EAR + right_EAR) / 2.0
+                    ear = self.ear_filter(ear)
 
-                if 0:
-                    plt.plot(self.ear_list)
-                    # plt.plot(self.ear_diff_list)
-                    plt.show()
-                    plt.pause(0.001)
+            elif self.detect_mode == "remote":
+                # decode from base64 string
+                frame_bin = cv2.imencode(".jpg", gray)[1]
+                frame_str = base64.b64encode(frame_bin).decode("utf-8")
+                request = blink_detection_pb2.GetEARRequest(image=frame_str)
+                ear_response = self.stub.GetEAR(request)
+                ear = ear_response.ear
+                if ear == -1:
+                    continue
+                left_eye = np.array(ear_response.left_eye).reshape(-1, 2)
+                right_eye = np.array(ear_response.right_eye).reshape(-1, 2)
 
-                if time.time() - self.last_blink_t > self.time_out_th.value:
-                    self.set_icon(-1)
-                else:
-                    self.set_icon(1)
+            self.ear_list.append(ear)
+            self.ear_diff = ear - self.ear_last
+            self.ear_last = ear
+            self.ear_diff_list.append(self.ear_diff)
+            if len(self.ear_diff_list) > 3:
+                self.ear_diff_list.pop(0)
+            if len(self.ear_list) > 100:
+                self.ear_list.pop(0)
 
-                if self.ear_diff_list[0] < self.ear_diff_th[0] and self.ear_diff_list[-1] > self.ear_diff_th[1]:
-                    self.blink_cnt += 1
-                    self.last_blink_t = time.time()
+            if 0:
+                plt.plot(self.ear_list)
+                plt.show()
+                plt.pause(0.001)
 
-                if self.show_frame_flag.value == 1:
-                    leftEyeHull = cv2.convexHull(leftEye)
-                    rightEyeHull = cv2.convexHull(rightEye)
-                    cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
-                    cv2.drawContours(frame, [rightEyeHull], -1, (0, 255, 0), 1)
-                    cv2.putText(
-                        frame,
-                        "Blinks: {}".format(self.blink_cnt),
-                        (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 0, 255),
-                        2,
-                    )
-                    cv2.putText(
-                        frame, "EAR: {:.2f}".format(ear), (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2
-                    )
-                    cv2.putText(
-                        frame,
-                        "EAR_DIFF: {:>6.3f}".format(self.ear_diff),
-                        (10, 90),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 0, 255),
-                        2,
-                    )
-                    if self.frame_queue.empty():
-                        frame_queue.put(frame)
+            if time.time() - self.last_blink_t > self.time_out_th.value:
+                self.set_icon(-1)
+            else:
+                self.set_icon(1)
+
+            if self.ear_diff_list[0] < self.ear_diff_th[0] and self.ear_diff_list[-1] > self.ear_diff_th[1]:
+                self.blink_cnt += 1
+                self.last_blink_t = time.time()
+
+            if self.show_frame_flag.value == 1:
+                leftEyeHull = cv2.convexHull(left_eye)
+                rightEyeHull = cv2.convexHull(right_eye)
+                cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
+                cv2.drawContours(frame, [rightEyeHull], -1, (0, 255, 0), 1)
+                cv2.putText(
+                    frame,
+                    "Blinks: {}".format(self.blink_cnt),
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 0, 255),
+                    2,
+                )
+                cv2.putText(frame, "EAR: {:.2f}".format(ear), (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                cv2.putText(
+                    frame,
+                    "EAR_DIFF: {:>6.3f}".format(self.ear_diff),
+                    (10, 90),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 0, 255),
+                    2,
+                )
+                if self.frame_queue.empty():
+                    frame_queue.put(frame)
 
             if time.time() - last_noti_t > self.noti_duty.value:
                 last_noti_t = time.time()
@@ -430,6 +453,8 @@ if __name__ == "__main__":
         detect_freq,
         noti_duty,
         blink_cnt_th,
+        detect_mode="local",
+        remote_host=["localhost", "12345"],
     )
     blink_thread = threading.Thread(target=blink_detector.run)
     blink_thread.start()

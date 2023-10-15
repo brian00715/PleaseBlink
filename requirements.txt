@@ -6,3 +6,5 @@ imutils
 pyqt6
 rumps
 matplotlib
+grpcio
+grpcio-tools
