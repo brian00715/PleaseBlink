@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package blink_detection;
+
+service BlinkDetection {
+    rpc GetEAR(GetEARRequest) returns (GetEARResponse);
+}
+
+message GetEARRequest {
+    string image = 1;
+}
+
+message GetEARResponse {
+    float ear = 1;
+    repeated int32 left_eye = 2;
+    repeated int32 right_eye = 3;
+}
