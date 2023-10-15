@@ -1,0 +1,8 @@
+opencv-python
+dlib
+scipy
+numpy
+imutils
+pyqt6
+rumps
+matplotlib
