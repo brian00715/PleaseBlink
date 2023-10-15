@@ -6,14 +6,18 @@
  """
 
 
+import argparse
+import base64
 import threading
 import time
 from multiprocessing import Array, Process, Queue, Value
 
 import cv2
 import dlib
+import grpc
 import imutils
 import matplotlib.pyplot as plt
+import numpy as np
 import rumps
 from imutils import face_utils
 from imutils.video import VideoStream
@@ -21,12 +25,9 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QApplication, QLabel, QSlider, QVBoxLayout, QWidget
 from scipy.spatial import distance as dist
-import base64
 
 import blink_detection_pb2
 import blink_detection_pb2_grpc
-import grpc
-import numpy as np
 
 
 class LowPassFilter:
@@ -297,6 +298,10 @@ class BlinkDetector:
             (self.rStart, self.rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
         elif self.detect_mode == "remote":
             self.channel = grpc.insecure_channel(f"{remote_host[0]}:{remote_host[1]}")
+            try:
+                grpc.channel_ready_future(self.channel).result(5)
+            except:
+                raise Exception("Connection to remote host timeout. You can try local mode later.")
             self.stub = blink_detection_pb2_grpc.BlinkDetectionStub(self.channel)
 
         self.vs = VideoStream(src=0).start()
@@ -422,6 +427,11 @@ class BlinkDetector:
 
 
 if __name__ == "__main__":
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument("--detect_mode", type=str, default="local", help="local or remote")
+    arg_parser.add_argument("--remote_host", type=str, default="localhost:12345", help="remote host address")
+    args = arg_parser.parse_args()
+
     # shared variables between processes
     frame_queue = Queue()
     show_frame_flag = Value("i", -1)
@@ -443,6 +453,7 @@ if __name__ == "__main__":
         blink_cnt_th,
     )
 
+    remote_host = args.remote_host.split(":")
     blink_detector = BlinkDetector(
         frame_queue,
         show_frame_flag,
@@ -453,8 +464,8 @@ if __name__ == "__main__":
         detect_freq,
         noti_duty,
         blink_cnt_th,
-        detect_mode="local",
-        remote_host=["localhost", "12345"],
+        detect_mode=args.detect_mode,
+        remote_host=[remote_host[0], remote_host[1]],
     )
     blink_thread = threading.Thread(target=blink_detector.run)
     blink_thread.start()

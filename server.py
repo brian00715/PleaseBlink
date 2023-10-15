@@ -1,17 +1,16 @@
+import argparse
+import base64
 from concurrent import futures
 
 import cv2
 import dlib
 import grpc
-import imutils
+import numpy as np
 from imutils import face_utils
 from scipy.spatial import distance as dist
 
 import blink_detection_pb2
 import blink_detection_pb2_grpc
-
-import numpy as np
-import base64
 
 
 class LowPassFilter:
@@ -85,11 +84,15 @@ class BlinkDetectionServicer(blink_detection_pb2_grpc.BlinkDetectionServicer):
 
 
 def serve():
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument("--port", type=str, default="12345")
+    args = arg_parser.parse_args()
+
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     blink_detection_pb2_grpc.add_BlinkDetectionServicer_to_server(BlinkDetectionServicer(), server)
-    server.add_insecure_port("0.0.0.0:12345")
+    server.add_insecure_port(f"0.0.0.0:{args.port}")
     server.start()
-    print("Server started")
+    print(f"Server started on port {args.port}")
     server.wait_for_termination()
 
 
