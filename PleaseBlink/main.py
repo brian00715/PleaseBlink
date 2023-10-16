@@ -6,6 +6,9 @@
  """
 
 
+import re
+import sys
+import os
 import argparse
 import base64
 import threading
@@ -43,7 +46,12 @@ class LowPassFilter:
         return self.value
 
 
-class StatusBarIcon(rumps.App):
+def is_valid_ip_port(ip_port_str):
+    ip_port_pattern = r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$"
+    return re.match(ip_port_pattern, ip_port_str) is not None
+
+
+class StatusBarApp(rumps.App):
     def __init__(
         self,
         show_frame_flag: Value,
@@ -54,21 +62,29 @@ class StatusBarIcon(rumps.App):
         detect_freq: Value,
         noti_duty: Value,
         blink_cnt_th: Value,
+        main_enable: Value,
     ):
-        super(StatusBarIcon, self).__init__("Eye Blink Monitor")
+        super(StatusBarApp, self).__init__("Eye Blink Monitor")
         # self.icon = "green.svg"  # Default icon
         self.menu = [
+            "Enable",
             "Show detection frame",
-            "Set timeout threshold",
-            "Set detection sensitivity",
-            "Set detection frequency",
-            "Set blink count threshold",
-            "Set notification duty",
-            "Quit",
+            "Detection mode",
+            "Set detection side",
+            "🔧Set timeout threshold",
+            "🔧Set detection sensitivity",
+            "🔧Set detection frequency",
+            "🔧Set blink count threshold",
+            "🔧Set notification duty",
+            "⛔️Quit",
         ]
         self.title = "Eye🟢"
         self.quit_button = None  # Hide the Quit button
+        self.menu["Set detection side"].title = "🛫Change detection to remote"
+        self.menu["Detection mode"].title = "👁️Detection mode: Local"
 
+        self.detect_mode_flag = True
+        self.main_enable = main_enable
         self.show_frame_flag = show_frame_flag
         self.status_icon_flag = status_icon_flag
         self.frame_queue = frame_queue
@@ -88,7 +104,46 @@ class StatusBarIcon(rumps.App):
         elif status == -1:
             self.title = "Eye🔴"
 
-    @rumps.clicked("Set blink count threshold")
+    @rumps.clicked("Set detection side")
+    def toggle_detect_side(self, sender):
+        global detect_mode, remote_host
+        self.main_enable.value = 0  # disable the detector temporarily
+
+        self.detect_mode_flag = not self.detect_mode_flag
+        if self.detect_mode_flag:  # local
+            detect_mode = "remote"
+            host_valid = False
+            while not host_valid:
+                response = rumps.Window(
+                    "Enter remote host (ip:port):",
+                    default_text=str(remote_host),
+                    dimensions=(100, 25),
+                ).run()
+                if response.clicked:
+                    remote_host = response.text
+                    if not is_valid_ip_port(remote_host):
+                        rumps.alert("Error!", "Please enter a valid host!")
+                        continue
+                    host_valid = True
+            self.menu["Set detection side"].title = "🛬Change detection to local"
+            self.menu["Detection mode"].title = "👁️Detection mode: Remote"
+        else:  # remote
+            detect_mode = "local"
+            self.menu["Set detection side"].title = "🛫Change detection to remote"
+            self.menu["Detection mode"].title = "👁️Detection mode: Local"
+
+        self.main_enable.value = 1  # enable the detector
+
+    @rumps.clicked("Enable")
+    def toggle_enable(self, sender):
+        self.status_icon_flag.value = -self.status_icon_flag.value
+        sender.state = not sender.state
+        if sender.state:
+            self.main_enable.value = 1
+        else:
+            self.main_enable.value = 0
+
+    @rumps.clicked("🔧Set blink count threshold")
     def set_blink_cnt_th(self, _):
         response = rumps.Window(
             "Enter blink count threshold [15,50]:",
@@ -102,7 +157,7 @@ class StatusBarIcon(rumps.App):
             except ValueError:
                 rumps.alert("Please enter a valid number!")
 
-    @rumps.clicked("Set notification duty")
+    @rumps.clicked("🔧Set notification duty")
     def set_noti_duty(self, _):
         response = rumps.Window(
             "Enter notification duty in seconds:",
@@ -116,7 +171,7 @@ class StatusBarIcon(rumps.App):
             except ValueError:
                 rumps.alert("Please enter a valid number!")
 
-    @rumps.clicked("Set detection frequency")
+    @rumps.clicked("🔧Set detection frequency")
     def set_detect_freq(self, _):
         response = rumps.Window(
             "Enter detection frequency [1,60] Hz:",
@@ -146,7 +201,7 @@ class StatusBarIcon(rumps.App):
             )
             self.qt_process.start()
 
-    @rumps.clicked("Set timeout threshold")
+    @rumps.clicked("🔧Set timeout threshold")
     def set_timeout(self, _):
         response = rumps.Window(
             "Enter timeout threshold in seconds:",
@@ -160,13 +215,7 @@ class StatusBarIcon(rumps.App):
             except ValueError:
                 rumps.alert("Please enter a valid number!")
 
-    @rumps.clicked("Quit")
-    def quit(self, _):
-        self.show_frame_flag.value = -2
-        time.sleep(1)
-        rumps.quit_application()
-
-    @rumps.clicked("Set detection sensitivity")
+    @rumps.clicked("🔧Set detection sensitivity")
     def set_sensitivity(self, _):
         response = rumps.Window(
             "Enter EAR difference threshold [0,1]:",
@@ -187,6 +236,12 @@ class StatusBarIcon(rumps.App):
         offset = -0.02 * sensitivity + 0.02
         th_high = th_low + offset
         return [th_low, th_high]
+
+    @rumps.clicked("⛔️Quit")
+    def quit(self, _):
+        self.show_frame_flag.value = -2
+        time.sleep(1)
+        rumps.quit_application()
 
 
 def show_video_frame(frame_queue: Queue, show_frame_flag: Value, ear_diff_th: Array):
@@ -264,6 +319,7 @@ def show_video_frame(frame_queue: Queue, show_frame_flag: Value, ear_diff_th: Ar
 class BlinkDetector:
     def __init__(
         self,
+        main_enable: Value,
         frame_queue: Queue,
         show_frame_flag: Value,
         status_icon_flag: Value,
@@ -276,6 +332,7 @@ class BlinkDetector:
         detect_mode="local",
         remote_host=["localhost", "12345"],
     ):
+        self.main_enable = main_enable
         self.frame_queue = frame_queue
         self.show_frame_flag = show_frame_flag
         self.status_icon_flag = status_icon_flag
@@ -293,7 +350,8 @@ class BlinkDetector:
 
         if self.detect_mode == "local":
             self.detector = dlib.get_frontal_face_detector()
-            self.predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+            dat_path = os.path.join(sys.path[0], "shape_predictor_68_face_landmarks.dat")
+            self.predictor = dlib.shape_predictor(dat_path)
             (self.lStart, self.lEnd) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
             (self.rStart, self.rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
         elif self.detect_mode == "remote":
@@ -304,12 +362,12 @@ class BlinkDetector:
                 raise Exception("Connection to remote host timeout. You can try local mode later.")
             self.stub = blink_detection_pb2_grpc.BlinkDetectionStub(self.channel)
 
-        self.vs = VideoStream(src=0).start()
         self.ear_filter = LowPassFilter(0.5)
         self.ear_diff_list = []
         self.ear_list = []
         self.ear_last = 0
         self.last_blink_t = time.time()
+        self.vs = None
 
     def eye_aspect_ratio(self, eye):
         A = dist.euclidean(eye[1], eye[5])
@@ -318,9 +376,41 @@ class BlinkDetector:
         ear = (A + B) / (2.0 * C)
         return ear
 
+    def change_detect_mode(self, detect_mode,remote_host=None):
+        self.detect_mode = detect_mode
+        if self.detect_mode == "local":
+            self.detector = dlib.get_frontal_face_detector()
+            dat_path = os.path.join(sys.path[0], "shape_predictor_68_face_landmarks.dat")
+            self.predictor = dlib.shape_predictor(dat_path)
+            (self.lStart, self.lEnd) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
+            (self.rStart, self.rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
+        elif self.detect_mode == "remote":
+            self.detector = None
+            self.predictor = None
+            self.channel = grpc.insecure_channel(f"{remote_host[0]}:{remote_host[1]}")
+            try:
+                grpc.channel_ready_future(self.channel).result(5)
+            except:
+                raise Exception("Connection to remote host timeout. You can try local mode later.")
+            self.stub = blink_detection_pb2_grpc.BlinkDetectionStub(self.channel)
+
     def run(self):
+        camera_opened_flag = False
         last_noti_t = time.time()
         while True:
+            if not self.main_enable.value:
+                if camera_opened_flag:
+                    if self.vs is not None:
+                        self.vs.stop()
+                    self.vs = None
+                    camera_opened_flag = False
+                time.sleep(1)
+                continue
+            elif not camera_opened_flag:
+                self.vs = VideoStream(src=0)
+                self.vs.start()
+                camera_opened_flag = True
+
             time.sleep(1 / self.detect_freq.value)
             frame = self.vs.read()
             wid_st_idx = int((frame.shape[1] - self.width) / 2)
@@ -329,6 +419,9 @@ class BlinkDetector:
             frame = imutils.resize(frame, width=300)
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+            ear = 0
+            left_eye = []
+            right_eye = []
             if self.detect_mode == "local":
                 # detect faces in the grayscale frame
                 rects = self.detector(gray, 0)
@@ -383,10 +476,11 @@ class BlinkDetector:
                 self.last_blink_t = time.time()
 
             if self.show_frame_flag.value == 1:
-                leftEyeHull = cv2.convexHull(left_eye)
-                rightEyeHull = cv2.convexHull(right_eye)
-                cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
-                cv2.drawContours(frame, [rightEyeHull], -1, (0, 255, 0), 1)
+                if not (len(left_eye) == 0 or len(right_eye) == 0):
+                    leftEyeHull = cv2.convexHull(left_eye)
+                    rightEyeHull = cv2.convexHull(right_eye)
+                    cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
+                    cv2.drawContours(frame, [rightEyeHull], -1, (0, 255, 0), 1)
                 cv2.putText(
                     frame,
                     "Blinks: {}".format(self.blink_cnt),
@@ -426,12 +520,16 @@ class BlinkDetector:
         print("blink detector terminated")
 
 
+detect_mode = None
+remote_host = None
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("--detect_mode", type=str, default="local", help="local or remote")
     arg_parser.add_argument("--remote_host", type=str, default="localhost:12345", help="remote host address")
     args = arg_parser.parse_args()
 
+    detect_mode = args.detect_mode
+    remote_host = args.remote_host
     # shared variables between processes
     frame_queue = Queue()
     show_frame_flag = Value("i", -1)
@@ -441,8 +539,9 @@ if __name__ == "__main__":
     detect_freq = Value("i", 60)
     blink_cnt_th = Value("i", 20)
     noti_duty = Value("i", 120)
+    main_enable = Value("i", 0)
 
-    status_icon = StatusBarIcon(
+    status_icon = StatusBarApp(
         show_frame_flag,
         status_icon_flag,
         timeout_th,
@@ -451,10 +550,11 @@ if __name__ == "__main__":
         detect_freq,
         noti_duty,
         blink_cnt_th,
+        main_enable,
     )
 
-    remote_host = args.remote_host.split(":")
     blink_detector = BlinkDetector(
+        main_enable,
         frame_queue,
         show_frame_flag,
         status_icon_flag,
@@ -464,7 +564,7 @@ if __name__ == "__main__":
         detect_freq,
         noti_duty,
         blink_cnt_th,
-        detect_mode=args.detect_mode,
+        detect_mode=detect_mode,
         remote_host=[remote_host[0], remote_host[1]],
     )
     blink_thread = threading.Thread(target=blink_detector.run)
