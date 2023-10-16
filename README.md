@@ -1,4 +1,4 @@
-# PleaseBlink!
+# PleaseBlink! <image src="./PleaseBlink/icon.png" width="35"/>
 
 <image src="./docs/image1.png" width="200"/>
 
@@ -41,7 +41,7 @@ PleaseBlink! will count the number of blinks over a specified duration. Should t
 
 <image src="./docs/image2.png" width="400px">
 
-> **Note❗️**: For the notification feature to function correctly, please ensure that Python has the necessary permissions to send notifications. Navigate to `System Preferences` → `Notifications`, scroll down to `Python`, and activate the notification option.
+> **Note❗️**: For the notification feature to function correctly, please ensure that Python has the necessary permissions to send notifications. Navigate to `System Preferences` → `Notifications`, scroll down to `PleaseBlink`, and activate the notification option.
 
 ## Develop
 
