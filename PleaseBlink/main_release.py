@@ -184,7 +184,7 @@ class StatusBarApp(rumps.App):
                 response = rumps.Window(
                     "Enter remote host (ip:port):",
                     default_text=str("localhost:12345"),
-                    dimensions=(150, 20),
+                    dimensions=(225, 20),
                 ).run()
                 if response.clicked:
                     remote_host = response.text
@@ -328,7 +328,6 @@ class StatusBarApp(rumps.App):
         if detect_mode == "local":
             try:
                 self.detector = dlib.get_frontal_face_detector()
-                self.dat_path = os.path.join(sys.path[0], "shape_predictor_68_face_landmarks.dat")
                 self.predictor = dlib.shape_predictor(self.dat_path)
             except:
                 # raise Exception("Failed to load local model. You can try remote mode later.")
