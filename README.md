@@ -15,7 +15,7 @@ Introducing PleaseBlink!—a lightweight application crafted to gently remind yo
 ## Getting Started
 
 1. Use prebuilt `.app`
-   Just download the latest release from [here]() and run it.
+   Just download the latest release from [here](https://github.com/brian00715/PleaseBlink/releases/new) and double-click to run it.
 
 2. Use source code
   Clone this repo and install the dependencies as instructions on [Develop](#develop).
