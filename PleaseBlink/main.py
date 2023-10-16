@@ -9,11 +9,9 @@
 import argparse
 import base64
 import os
-import re
 import sys
 import threading
 import time
-from multiprocessing import Array, Process, Queue, Value
 
 import cv2
 import dlib
@@ -25,10 +23,6 @@ import numpy as np
 import rumps
 from imutils import face_utils
 from imutils.video import VideoStream
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QImage, QPixmap
-from PyQt6.QtWidgets import QApplication, QLabel, QSlider, QVBoxLayout, QWidget
-from scipy.spatial import distance as dist
 
 import blink_detection_pb2
 import blink_detection_pb2_grpc
@@ -48,19 +42,19 @@ class LowPassFilter:
 
 
 def is_valid_ip_port(ip_port_str):
-    # ip_port_pattern = r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$"
-    # return re.match(ip_port_pattern, ip_port_str) is not None
     if len(ip_port_str.split(":")) == 2:
         return True
     else:
         return False
 
 
+def euclidean_dist(pt1, pt2):
+    return np.sqrt(np.sum((pt1 - pt2) ** 2))
+
+
 class StatusBarApp(rumps.App):
     def __init__(
         self,
-        show_frame_flag: Value,
-        frame_queue: Queue,
         detect_mode="local",
         remote_host=("localhost", 12345),
     ):
@@ -86,8 +80,7 @@ class StatusBarApp(rumps.App):
         self.detect_mode = detect_mode
         remote_host_ar = remote_host.split(":")
         self.remote_host = (remote_host_ar[0], int(remote_host_ar[1]))
-        self.show_frame_flag = show_frame_flag
-        self.frame_queue = frame_queue
+        self.show_frame_flag = -1
 
         self.timeout_th = 5
         self.ear_diff_th = [-0.03, -0.02]
@@ -101,6 +94,7 @@ class StatusBarApp(rumps.App):
         self.qt_process = None
 
         # for eye detection----------------------------------------------------------------
+        self.frame_draw = None
         self.blink_cnt = 0
         self.width = 600
         self.height = 720
@@ -127,6 +121,12 @@ class StatusBarApp(rumps.App):
         self.vs = None
         self.blink_detect_thread = threading.Thread(target=self.run_blink_detect)
         self.blink_detect_thread.start()
+
+    @rumps.timer(1 / 30)
+    def timer_test(self, _):
+        if self.frame_draw is not None and self.show_frame_flag == 1:
+            cv2.imshow("Detection Frame", self.frame_draw)
+            cv2.waitKey(1)
 
     @rumps.clicked("Set detection side")
     def toggle_detect_side(self, sender):
@@ -216,19 +216,14 @@ class StatusBarApp(rumps.App):
 
     @rumps.clicked("Show detection frame")
     def toggle_show_frame(self, sender):
-        self.show_frame_flag.value = -self.show_frame_flag.value
+        self.show_frame_flag = -self.show_frame_flag
         sender.state = not sender.state
-        if self.show_frame_flag.value == -1:
+        if self.show_frame_flag == -1:
             print("Hiding video frame")
-            if not self.qt_process is None:
-                self.qt_process.terminate()
-                self.qt_process = None
-        elif self.show_frame_flag.value == 1:
+            cv2.destroyAllWindows()
+
+        elif self.show_frame_flag == 1:
             print("Showing video frame")
-            self.qt_process = Process(
-                target=show_video_frame, args=(self.frame_queue, self.show_frame_flag, self.ear_diff_th)
-            )
-            self.qt_process.start()
 
     @rumps.clicked("🔧Set timeout threshold")
     def set_timeout(self, _):
@@ -262,7 +257,7 @@ class StatusBarApp(rumps.App):
 
     @rumps.clicked("⛔️Quit")
     def quit(self, _):
-        self.show_frame_flag.value = -2
+        self.show_frame_flag = -2
         time.sleep(1)
         rumps.quit_application()
 
@@ -279,9 +274,9 @@ class StatusBarApp(rumps.App):
             self.title = "Eye🔴"
 
     def eye_aspect_ratio(self, eye):
-        A = dist.euclidean(eye[1], eye[5])
-        B = dist.euclidean(eye[2], eye[4])
-        C = dist.euclidean(eye[0], eye[3])
+        A = euclidean_dist(eye[1], eye[5])
+        B = euclidean_dist(eye[2], eye[4])
+        C = euclidean_dist(eye[0], eye[3])
         ear = (A + B) / (2.0 * C)
         return ear
 
@@ -392,7 +387,7 @@ class StatusBarApp(rumps.App):
                 self.blink_cnt += 1
                 self.last_blink_t = time.time()
 
-            if self.show_frame_flag.value == 1:
+            if self.show_frame_flag == 1:
                 if not (len(left_eye) == 0 or len(right_eye) == 0):
                     leftEyeHull = cv2.convexHull(left_eye)
                     rightEyeHull = cv2.convexHull(right_eye)
@@ -417,8 +412,7 @@ class StatusBarApp(rumps.App):
                     (0, 0, 255),
                     2,
                 )
-                if self.frame_queue.empty():
-                    frame_queue.put(frame)
+                self.frame_draw = frame.copy()
 
             if time.time() - last_noti_t > self.noti_duty:
                 last_noti_t = time.time()
@@ -430,100 +424,18 @@ class StatusBarApp(rumps.App):
                     )
 
                 self.blink_cnt = 0
-
-            if self.show_frame_flag.value == -2:
+            if self.show_frame_flag == -2:
                 break
-        frame_queue.close()
         print("blink detector terminated")
 
 
-def show_video_frame(frame_queue: Queue, show_frame_flag: Value, ear_diff_th: Array):
-    app = QApplication([])
-    window = QWidget()
-    layout = QVBoxLayout()
-    label = QLabel()
-    ear_diff_lb_label = QLabel("EAR_DIFF_LB: {:.3f}".format(ear_diff_th[0]))
-    ear_diff_ub_label = QLabel("EAR_DIFF_UB: {:.3f}".format(ear_diff_th[1]))
-    scale_factor = 1000
-
-    def set_ear_diff_th_lb(val):
-        ear_diff_th[0] = val / scale_factor
-        # print("EAR difference lower bound set to: ", ear_diff_th[0])
-        ear_diff_lb_label.setText("EAR_DIFF_LB: {:.3f}".format(ear_diff_th[0]))
-
-    def set_ear_diff_th_ub(val):
-        ear_diff_th[1] = val / scale_factor
-        # print("EAR difference upper bound set to: ", ear_diff_th[1])
-        ear_diff_ub_label.setText("EAR_DIFF_UB: {:.3f}".format(ear_diff_th[1]))
-
-    # add slider to control the threshold
-    ear_diff_th_lb_slider = QSlider(Qt.Orientation.Horizontal)
-    ear_diff_th_lb_slider.setMinimum(-50)
-    ear_diff_th_lb_slider.setMaximum(0)
-    ear_diff_th_lb_slider.setValue(int(ear_diff_th[0] * scale_factor))
-    ear_diff_th_lb_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-    ear_diff_th_lb_slider.setTickInterval(1)
-    ear_diff_th_lb_slider.valueChanged.connect(set_ear_diff_th_lb)
-    layout.addWidget(ear_diff_lb_label)
-    layout.addWidget(ear_diff_th_lb_slider)
-
-    ear_diff_th_ub_slider = QSlider(Qt.Orientation.Horizontal)
-    ear_diff_th_ub_slider.setMinimum(-30)
-    ear_diff_th_ub_slider.setMaximum(20)
-    ear_diff_th_ub_slider.setValue(int(ear_diff_th[1] * scale_factor))
-    ear_diff_th_ub_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-    ear_diff_th_ub_slider.setTickInterval(1)
-    ear_diff_th_ub_slider.valueChanged.connect(set_ear_diff_th_ub)
-    layout.addWidget(ear_diff_ub_label)
-    layout.addWidget(ear_diff_th_ub_slider)
-
-    layout.addWidget(label)
-    window.setLayout(layout)
-
-    def update_frame():
-        if show_frame_flag.value == -1:
-            window.hide()
-        elif show_frame_flag.value == 1:
-            window.show()
-        elif show_frame_flag.value == -2:
-            while not frame_queue.empty():
-                frame_queue.get()  # clear the queue
-            timer.stop()
-            window.close()
-            print("Qt process terminated")
-            app.quit()
-
-        if not frame_queue.empty():
-            frame = frame_queue.get()
-            rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb_image.shape
-            bytes_per_line = ch * w
-            q_img = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-            pixmap = QPixmap.fromImage(q_img)
-            label.setPixmap(pixmap)
-
-    timer = QTimer()
-    timer.timeout.connect(update_frame)
-    timer.start(int(1 / 30 * 1000))
-    window.show()
-    app.exec()
-
-
-detect_mode = None
-remote_host = None
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("--detect_mode", type=str, default="local", help="local or remote")
     arg_parser.add_argument("--remote_host", type=str, default="localhost:12345", help="remote host address")
     args = arg_parser.parse_args()
 
-    # shared variables between processes
-    frame_queue = Queue()
-    show_frame_flag = Value("i", -1)
-
     status_icon = StatusBarApp(
-        show_frame_flag,
-        frame_queue,
         args.detect_mode,
         args.remote_host,
     )

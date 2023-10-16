@@ -1,7 +1,7 @@
 **venv/
 **.DS_Store
 test.py
-build/
-dist/
+**build/
+**dist/
 **.spec
 **__pycache__/

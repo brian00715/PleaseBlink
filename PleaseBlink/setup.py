@@ -6,14 +6,21 @@ Usage:
 """
 
 from setuptools import setup
+import plistlib
 
-APP = ['main.py']
-DATA_FILES = ["shape_predictor_68_face_landmarks.dat"]
-OPTIONS = {}
+plist = plistlib.load(open("Info.plist", "rb"))
 
+APP = ["main.py"]
+DATA_FILES = ["shape_predictor_68_face_landmarks.dat", "Info.plist"]
+OPTIONS = {
+    "iconfile": "icon.png",
+    "plist": plist,
+}
+APP_NAME = "PleaseBlink!"
 setup(
     app=APP,
     data_files=DATA_FILES,
-    options={'py2app': OPTIONS},
-    setup_requires=['py2app'],
+    options={"py2app": OPTIONS},
+    setup_requires=["py2app"],
+    name=APP_NAME,
 )
