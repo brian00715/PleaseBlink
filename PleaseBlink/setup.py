@@ -10,11 +10,12 @@ import plistlib
 
 plist = plistlib.load(open("Info.plist", "rb"))
 
-APP = ["main.py"]
+APP = ["main_release.py"]
 DATA_FILES = ["shape_predictor_68_face_landmarks.dat", "Info.plist"]
 OPTIONS = {
     "iconfile": "icon.png",
     "plist": plist,
+    "packages": ["cv2", "dlib", "grpc", "rumps", "numpy"],
 }
 APP_NAME = "PleaseBlink!"
 setup(

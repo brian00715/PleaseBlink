@@ -3,6 +3,7 @@
  # @ Email: smkk00715@gmail.com
  # @ Create Time: 2023-10-14 21:41:53
  # @ Modified time: 2023-10-15 01:21:11
+ # @ Description: Release version for minize third-party dependencies
  """
 
 
@@ -16,12 +17,8 @@ import time
 import cv2
 import dlib
 import grpc
-import imutils
-import matplotlib.pyplot as plt
-import numpy as np
 import rumps
-from imutils import face_utils
-from imutils.video import VideoStream
+import numpy as np
 
 import blink_detection_pb2
 import blink_detection_pb2_grpc
@@ -49,6 +46,51 @@ def is_valid_ip_port(ip_port_str):
 
 def euclidean_dist(pt1, pt2):
     return np.sqrt(np.sum((pt1 - pt2) ** 2))
+
+
+def shape_to_np(shape, dtype="int"):
+    # initialize the list of (x, y)-coordinates
+    coords = np.zeros((shape.num_parts, 2), dtype=dtype)
+
+    # loop over all facial landmarks and convert them
+    # to a 2-tuple of (x, y)-coordinates
+    for i in range(0, shape.num_parts):
+        coords[i] = (shape.part(i).x, shape.part(i).y)
+
+    # return the list of (x, y)-coordinates
+    return coords
+
+
+def resize(image, width=None, height=None, inter=cv2.INTER_AREA):
+    # initialize the dimensions of the image to be resized and
+    # grab the image size
+    dim = None
+    (h, w) = image.shape[:2]
+
+    # if both the width and height are None, then return the
+    # original image
+    if width is None and height is None:
+        return image
+
+    # check to see if the width is None
+    if width is None:
+        # calculate the ratio of the height and construct the
+        # dimensions
+        r = height / float(h)
+        dim = (int(w * r), height)
+
+    # otherwise, the height is None
+    else:
+        # calculate the ratio of the width and construct the
+        # dimensions
+        r = width / float(w)
+        dim = (width, int(h * r))
+
+    # resize the image
+    resized = cv2.resize(image, dim, interpolation=inter)
+
+    # return the resized image
+    return resized
 
 
 class StatusBarApp(rumps.App):
@@ -97,6 +139,8 @@ class StatusBarApp(rumps.App):
         self.blink_cnt = 0
         self.width = 600
         self.height = 720
+        (self.lStart, self.lEnd) = (42, 48)
+        (self.rStart, self.rEnd) = (36, 42)
         if os.getenv("RESOURCEPATH") is not None:
             self.dat_path = os.path.join(os.getenv("RESOURCEPATH"), "shape_predictor_68_face_landmarks.dat")
         else:
@@ -105,8 +149,6 @@ class StatusBarApp(rumps.App):
         if self.detect_mode == "local":
             self.detector = dlib.get_frontal_face_detector()
             self.predictor = dlib.shape_predictor(self.dat_path)
-            (self.lStart, self.lEnd) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
-            (self.rStart, self.rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
         elif self.detect_mode == "remote":
             self.channel = grpc.insecure_channel(f"{self.remote_host[0]}:{self.remote_host[1]}")
             try:
@@ -288,8 +330,6 @@ class StatusBarApp(rumps.App):
                 self.detector = dlib.get_frontal_face_detector()
                 self.dat_path = os.path.join(sys.path[0], "shape_predictor_68_face_landmarks.dat")
                 self.predictor = dlib.shape_predictor(self.dat_path)
-                (self.lStart, self.lEnd) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
-                (self.rStart, self.rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
             except:
                 # raise Exception("Failed to load local model. You can try remote mode later.")
                 rumps.alert("Failed to load local model. You can try remote mode later.")
@@ -315,22 +355,21 @@ class StatusBarApp(rumps.App):
             if not self.main_enable:
                 if camera_opened_flag:
                     if self.vs is not None:
-                        self.vs.stop()
+                        self.vs.release()
                     self.vs = None
                     camera_opened_flag = False
                 time.sleep(1)
                 continue
             elif not camera_opened_flag:
-                self.vs = VideoStream(src=0)
-                self.vs.start()
+                self.vs = cv2.VideoCapture(0)
                 camera_opened_flag = True
 
             time.sleep(1 / self.detect_freq)
-            frame = self.vs.read()
+            ret, frame = self.vs.read()
             wid_st_idx = int((frame.shape[1] - self.width) / 2)
             hei_st_idx = int((frame.shape[0] - self.height) / 2)
             frame = frame[hei_st_idx : hei_st_idx + self.height, wid_st_idx : wid_st_idx + self.width]
-            frame = imutils.resize(frame, width=300)
+            frame = resize(frame, width=300)
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
             ear = 0
@@ -342,7 +381,7 @@ class StatusBarApp(rumps.App):
                 # loop over the face detections
                 for rect in rects:
                     shape = self.predictor(gray, rect)
-                    shape = face_utils.shape_to_np(shape)
+                    shape = shape_to_np(shape)
 
                     # extract the left and right eye coordinates, then use the coordinates to compute the eye aspect ratio for both eyes
                     left_eye = shape[self.lStart : self.lEnd]
@@ -375,11 +414,6 @@ class StatusBarApp(rumps.App):
             if len(self.ear_list) > 100:
                 self.ear_list.pop(0)
 
-            if 0:
-                plt.plot(self.ear_list)
-                plt.show()
-                plt.pause(0.001)
-
             if time.time() - self.last_blink_t > self.timeout_th:
                 self.set_icon(-1)
             else:
@@ -391,6 +425,7 @@ class StatusBarApp(rumps.App):
 
             if self.show_frame_flag == 1:
                 if not (len(left_eye) == 0 or len(right_eye) == 0):
+                    # eye to cv2.umat
                     leftEyeHull = cv2.convexHull(left_eye)
                     rightEyeHull = cv2.convexHull(right_eye)
                     cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
